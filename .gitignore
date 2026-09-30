@@ -1,0 +1,5 @@
+# reference dumps and other tool output
+/out/
+__pycache__/
+node_modules/
+.DS_Store
