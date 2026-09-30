@@ -25,7 +25,7 @@
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>
       </a>
     </header>
-    <input type="file" id="fileInput" accept="image/*" hidden>
+    <input type="file" id="fileInput" accept="image/*" multiple hidden>
 
     <!-- output size -->
     <section class="group">
@@ -109,9 +109,9 @@
 
   <main class="stage" aria-label="Result">
     <div class="viewer-bar" id="viewerBar" hidden>
-      <button class="open-btn" id="pickBtn" type="button" title="Open another picture (or drop / paste one)" hidden>
-        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
-        <span id="sourceName">Open</span>
+      <button class="open-btn" id="pickBtn" type="button" title="Add pictures, up to 24 for batch runs (or drop / paste them)">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        <span>Add</span>
       </button>
       <div class="seg views" id="views" role="radiogroup" aria-label="View"></div>
       <div class="seg steps" id="steps" role="radiogroup" aria-label="Pipeline step" hidden></div>
@@ -142,9 +142,9 @@
         <h1>Turn any picture into pixel art</h1>
         <p class="lead">PixelOE keeps thin lines and small details that a plain downscale would lose. It runs entirely in this browser, and your pictures never leave your device.</p>
         <div class="welcome-actions">
-          <button class="primary wide" id="welcomePick" type="button">Choose a picture</button>
+          <button class="primary wide" id="welcomePick" type="button">Choose pictures</button>
         </div>
-        <p class="help">or drop one here, or paste with <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+        <p class="help">or drop them here, or paste with <kbd>Ctrl</kbd>+<kbd>V</kbd>. Pick several (up to 24) to process them as a batch.</p>
         <div class="samples" id="samples"></div>
       </div>
 
@@ -159,6 +159,24 @@
     </div>
 
     <div class="stage-foot" id="stageFoot" hidden>
+      <div class="batch-row" id="batchRow" hidden>
+        <div class="strip" id="strip" aria-label="Pictures"></div>
+        <div class="batch-actions">
+          <div class="batch-status">
+            <span id="batchCount"></span>
+            <div class="bar-progress"><div id="batchBar"></div></div>
+          </div>
+          <button type="button" class="batch-btn" id="runAllBtn" title="Process every picture with the current settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 5v14l11-7z"/></svg><span>Run all</span>
+          </button>
+          <button type="button" class="batch-btn stop" id="stopAllBtn" title="Stop after the current picture" hidden>
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2" class="fill"/></svg><span>Stop</span>
+          </button>
+          <button type="button" class="batch-btn" id="zipBtn">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg><span>ZIP</span>
+          </button>
+        </div>
+      </div>
       <div class="info">
         <div class="meta" id="meta"></div>
         <div class="actions">
@@ -193,7 +211,7 @@
       <li><b>Palette (optional).</b> Deterministic k-means finds a palette. Weighted and repeat variants favor detail pixels. Ordered or error-diffusion dithering can be added.</li>
     </ol>
     <p class="help">This is a JavaScript port of <a href="https://github.com/KohakuBlueleaf/PixelOE/tree/v1.0.0" target="_blank" rel="noopener">PixelOE v1.0.0</a> by Shin-Ying Yeh (KohakuBlueleaf), Apache-2.0. It follows the reference torch pipeline and is checked against it. The sample pictures come from the PixelOE repository.</p>
-    <p class="help">Shortcuts: <kbd>Space</kbd> (hold) shows the source · <kbd>G</kbd> pixel grid · <kbd>0</kbd> fit · <kbd>1</kbd> actual pixels · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>S</kbd> download · <kbd>Ctrl</kbd>+<kbd>V</kbd> paste a picture</p>
+    <p class="help">Shortcuts: <kbd>Space</kbd> (hold) shows the source · <kbd>G</kbd> pixel grid · <kbd>0</kbd> fit · <kbd>1</kbd> actual pixels · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>S</kbd> download · <kbd>Ctrl</kbd>+<kbd>V</kbd> paste a picture · <kbd>←</kbd>/<kbd>→</kbd> previous / next picture</p>
   </form>
 </dialog>
 

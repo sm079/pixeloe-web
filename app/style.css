@@ -335,6 +335,59 @@ input[type="range"]:disabled { opacity: 0.4; }
 .info .scale { width: auto; height: 32px; padding: 0 26px 0 10px; font-size: 12px; border-radius: 8px; }
 @container (max-width: 560px) { .info .actions span { display: none; } .info .actions button { padding: 0 9px; } }
 
+.info .meta .src { color: var(--fg); }
+
+/* pictures of the session + batch actions */
+.batch-row { display: flex; align-items: center; gap: 12px; height: 60px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.strip {
+  flex: 1 1 auto; min-width: 0; height: 100%; display: flex; align-items: center; gap: 6px; overflow-x: auto; overflow-y: hidden;
+  padding: 0 2px; scrollbar-width: thin; scrollbar-color: var(--line-2) transparent;
+}
+.tile { position: relative; flex: none; width: 48px; height: 48px; }
+.tile-pick {
+  width: 100%; height: 100%; padding: 0; border-radius: 9px; overflow: hidden; border: 2px solid transparent; background: var(--bg-2);
+}
+.tile-pick canvas { width: 100%; height: 100%; display: block; }
+.tile-pick[aria-current="true"] { border-color: var(--accent); }
+.tile-pick:hover:not([aria-current="true"]) { border-color: var(--line-2); }
+.tile:not(.done):not(.running) .tile-pick:not([aria-current="true"]) canvas { opacity: 0.55; }
+.tile .badge {
+  position: absolute; right: -3px; bottom: -3px; width: 17px; height: 17px; border-radius: 50%; display: none; place-items: center;
+  font-size: 11px; font-weight: 800; pointer-events: none; border: 2px solid var(--panel);
+}
+.tile.done .badge { display: grid; background: var(--good); color: var(--panel); }
+.tile.failed .badge { display: grid; background: var(--bad); color: var(--panel); }
+.tile .badge svg { width: 10px; height: 10px; stroke-width: 3.2; }
+.tile.running .tile-pick::after {
+  content: ""; position: absolute; inset: 12px; border-radius: 50%; border: 3px solid rgba(255, 255, 255, 0.35); border-top-color: #fff;
+  animation: spin 0.9s linear infinite;
+}
+.tile.running .tile-pick { position: relative; }
+.tile .x {
+  position: absolute; top: -5px; right: -5px; width: 18px; height: 18px; padding: 0; border-radius: 50%; display: none; place-items: center;
+  border: 1px solid var(--line-2); background: var(--panel); color: var(--muted); font-size: 13px; line-height: 1;
+}
+.tile:hover .x, .tile .x:focus-visible { display: grid; }
+.tile .x:hover { color: var(--bad); border-color: var(--bad); }
+.tile.add {
+  display: grid; place-items: center; padding: 0; border-radius: 9px; border: 1.5px dashed var(--line-2); background: transparent; color: var(--muted);
+}
+.tile.add:hover:not(:disabled) { color: var(--accent-2); border-color: var(--accent); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.batch-actions { flex: none; display: flex; align-items: center; gap: 6px; }
+.batch-status { display: flex; flex-direction: column; gap: 5px; width: 92px; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.batch-status .bar-progress { height: 4px; }
+.batch-btn {
+  display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px; border-radius: 8px; border: 1px solid var(--line);
+  background: var(--bg-2); color: var(--fg); font-size: 12px; white-space: nowrap;
+}
+.batch-btn:hover:not(:disabled) { border-color: var(--line-2); }
+.batch-btn svg { width: 14px; height: 14px; }
+.batch-btn.stop { color: var(--bad); }
+.batch-btn.stop svg { width: 12px; height: 12px; }
+@container (max-width: 640px) { .batch-status { display: none; } .batch-btn span { display: none; } .batch-btn { padding: 0 9px; } }
+
 .swatches { display: flex; flex-wrap: wrap; gap: 3px; padding: 0 4px; }
 .swatches:empty { display: none; }
 .swatches button {

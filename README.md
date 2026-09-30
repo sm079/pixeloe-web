@@ -25,11 +25,18 @@ numerically against it (see [Fidelity](#fidelity)).
   map, dilated, eroded, expanded), like the demo's Outline Expansion tab.
 - **Export.** Download or copy a PNG at 1×–16× (the default matches the patch size, like
   upstream), named the way the upstream demo names files. Palette colors can be copied as hex.
-- Drop, paste (<kbd>Ctrl</kbd>+<kbd>V</kbd>) or pick a picture, or start from a sample. Settings
+- **Batch runs.** Pick, drop or paste up to 24 pictures. A strip under the viewer shows them all;
+  click one (or press <kbd>←</kbd>/<kbd>→</kbd>) to tune its settings live. **Run all** processes
+  every picture with the current settings, one after another; each picture keeps the chosen longest
+  side and its own proportions. **ZIP** downloads every result (processing any that are out of
+  date first). The limit keeps memory in check, because every original file stays in the tab until
+  it is removed.
+- Drop, paste (<kbd>Ctrl</kbd>+<kbd>V</kbd>) or pick pictures, or start from a sample. Settings
   are remembered. There are light and dark themes, and the layout works on phones.
 
 Keyboard: hold <kbd>Space</kbd> to see the source, <kbd>G</kbd> pixel grid, <kbd>0</kbd> fit,
-<kbd>1</kbd> actual pixels, <kbd>+</kbd>/<kbd>−</kbd> zoom, <kbd>Ctrl</kbd>+<kbd>S</kbd> download.
+<kbd>1</kbd> actual pixels, <kbd>+</kbd>/<kbd>−</kbd> zoom, <kbd>Ctrl</kbd>+<kbd>S</kbd> download, <kbd>←</kbd>/<kbd>→</kbd>
+previous / next picture.
 
 ## Run it
 
@@ -48,7 +55,8 @@ Pushing to `main` publishes the site to GitHub Pages (`.github/workflows/pages.y
 | path | what |
 | --- | --- |
 | `index.html`, `app/style.css`, `app/main.js` | the UI: settings rail, viewer, export |
-| `app/worker.js` | runs the pipeline off the main thread, caches each stage |
+| `app/worker.js` | runs the pipeline off the main thread, caches each stage of the active picture |
+| `app/helper.js` | a thread of the worker's pool, for the per-channel pieces |
 | `app/pixeloe.js` | the PixelOE port: pure functions on planar float32 images, no DOM (also runs in Node) |
 | `app/samples/` | sample pictures from the PixelOE repository |
 | `tools/reference.py` | dumps outputs of the upstream torch pipeline |

@@ -42,14 +42,23 @@ const pipelineParams = () => ({
 // ------------------------------------------------------------------ worker
 
 const worker = new Worker(new URL("./worker.js", import.meta.url), { type: "module" });
-let runSeq = 0, busy = false, pending = false, lastParams = null;
-let source = null; // { name, w, h, note }
-let result = null; // { id, w, h, canvas, palette, colors, work, ms, params }
+let runSeq = 0, busy = false, pending = false;
+let source = null; // the active picture (an entry of `pictures`)
+let result = null; // shown result: { id, w, h, canvas, palette, colors, work, ms, timings, params }
 const views = new Map(); // intermediate name -> canvas, for the current result
 const viewWaiters = new Map();
+const runs = new Map(); // live run id -> { pic, params }
+const batchJobs = new Map(); // batch run id -> { resolve, reject }
+let idleWaiters = []; // resolved when the live run settles
 
 worker.onmessage = ({ data: m }) => {
-  if (m.type === "progress") showProgress(m.stage, m.frac);
+  const job = batchJobs.get(m.id);
+  if (job) {
+    if (m.type === "result") { batchJobs.delete(m.id); job.resolve(m); }
+    else if (m.type === "error") { batchJobs.delete(m.id); job.reject(new Error(m.message)); }
+    return;
+  }
+  if (m.type === "progress") { if (runs.get(m.id)?.pic === source) showProgress(m.stage, m.frac); }
   else if (m.type === "result") onResult(m);
   else if (m.type === "view") onView(m);
   else if (m.type === "error") onError(m.message);
@@ -61,17 +70,20 @@ function run() {
   if (busy) { pending = true; return; }
   busy = true; pending = false;
   clearTimeout(progressTimer);
-  lastParams = pipelineParams();
-  worker.postMessage({ type: "run", id: ++runSeq, params: lastParams });
+  const params = pipelineParams();
+  runs.set(++runSeq, { pic: source, params });
+  worker.postMessage({ type: "run", id: runSeq, params });
   setStatus("busy", "Working…");
   progressTimer = setTimeout(() => { $("progress").hidden = false; }, 150); // skip the flash for quick updates
   $("errorCard").hidden = true;
 }
+const settle = () => { const w = idleWaiters; idleWaiters = []; w.forEach((f) => f()); };
 
 let autoTimer = 0;
 function settingsChanged() {
   save();
   renderControls();
+  renderStrip();
   if (S.live && source) { clearTimeout(autoTimer); autoTimer = setTimeout(run, 120); }
   else updateGo();
 }
@@ -94,19 +106,30 @@ function toCanvas(rgba, w, h) {
   c.getContext("2d").putImageData(new ImageData(rgba, w, h), 0, 0);
   return c;
 }
+const outFrom = (m, params) => ({ w: m.w, h: m.h, canvas: toCanvas(m.rgba, m.w, m.h), palette: m.palette, colors: m.colors, work: m.work, ms: m.ms, timings: m.timings, params, key: JSON.stringify(params) });
 
 function onResult(m) {
   busy = false;
-  const sizeChanged = !result || result.w !== m.w || result.h !== m.h;
-  result = { id: m.id, w: m.w, h: m.h, canvas: toCanvas(m.rgba, m.w, m.h), palette: m.palette, colors: m.colors, work: m.work, ms: m.ms, timings: m.timings, params: lastParams };
-  views.clear();
-  for (const [, reject] of viewWaiters) reject();
-  viewWaiters.clear();
+  const { pic, params } = runs.get(m.id) || {};
+  runs.delete(m.id);
+  if (pic) pic.out = outFrom(m, params);
   if (pending) run();
   else {
     endProgress();
     setStatus("ok", `Done in ${fmtMs(m.ms)}`);
+    settle();
   }
+  if (pic && pic === source) show({ ...pic.out, id: m.id });
+  renderStrip();
+}
+
+// Put a result on the stage (a finished run, or a stored one when switching pictures).
+function show(res) {
+  const sizeChanged = !result || result.w !== res.w || result.h !== res.h;
+  result = res;
+  views.clear();
+  for (const [, [, reject]] of viewWaiters) reject();
+  viewWaiters.clear();
   $("welcome").hidden = true;
   $("view").hidden = false;
   $("stageFoot").hidden = false;
@@ -127,6 +150,7 @@ function onError(message) {
   card.textContent = message;
   card.hidden = false;
   if (pending) run();
+  else settle();
   updateGo();
 }
 
@@ -148,21 +172,24 @@ function onView(m) {
   w?.[0](c);
 }
 
-// ------------------------------------------------------------------ source picture
+// ------------------------------------------------------------------ pictures (one active, the rest for batch runs)
 
+const MAX_PICTURES = 24; // the batch keeps every file and a result for each; keep it modest
 const MAX_SOURCE_PIXELS = 36e6;
+const pictures = []; // { id, name, blob, w, h, note, out, thumb, state: "" | "running" | "error" }
+let picSeq = 0;
 
-async function loadBlob(blob, name) {
+// Decode to RGBA; also records the picture's size. Returns null if the browser can't open it.
+async function decode(pic) {
   let bmp;
   try {
-    bmp = await createImageBitmap(blob, { imageOrientation: "from-image" });
+    bmp = await createImageBitmap(pic.blob, { imageOrientation: "from-image" });
   } catch {
-    toast("That file isn't a picture this browser can open.");
-    return;
+    return null;
   }
   let w = bmp.width, h = bmp.height;
-  const note = w * h > MAX_SOURCE_PIXELS;
-  if (note) {
+  pic.note = w * h > MAX_SOURCE_PIXELS;
+  if (pic.note) {
     const f = Math.sqrt(MAX_SOURCE_PIXELS / (w * h));
     w = Math.round(w * f); h = Math.round(h * f);
   }
@@ -171,33 +198,71 @@ async function loadBlob(blob, name) {
   const ctx = c.getContext("2d", { willReadFrequently: true });
   ctx.imageSmoothingQuality = "high";
   ctx.drawImage(bmp, 0, 0, w, h);
-  const rgba = ctx.getImageData(0, 0, w, h).data;
   bmp.close?.();
-
-  source = { name: name || "Pasted picture", w, h, note };
-  worker.postMessage({ type: "source", rgba, w, h }, [rgba.buffer]);
-
-  // like the PixelOE demo: keep the longest side, follow the picture's proportions
-  if (S.lock) applyLong(S.long);
-  renderSource();
-  save();
-  renderControls();
-  $("welcome").hidden = true;
-  run();
+  pic.w = w; pic.h = h;
+  return ctx.getImageData(0, 0, w, h).data;
 }
 
-function renderSource() {
-  const btn = $("pickBtn");
-  btn.hidden = !source;
-  if (!source) return;
-  $("sourceName").textContent = source.name;
-  btn.title = `${source.name} · ${source.w} × ${source.h}${source.note ? " (reduced)" : ""}\nClick to open another picture, or drop / paste one`;
+function addPictures(items) {
+  const room = MAX_PICTURES - pictures.length;
+  if (room <= 0) { toast(`Up to ${MAX_PICTURES} pictures at a time. Remove some first.`); return; }
+  if (items.length > room) toast(`Up to ${MAX_PICTURES} pictures at a time: added the first ${room}.`);
+  const added = items.slice(0, room).map(({ blob, name }) => ({ id: ++picSeq, name: name || "Pasted picture", blob, w: 0, h: 0, out: null, state: "" }));
+  pictures.push(...added);
+  if (added.length) activate(added[0]);
+  renderStrip();
+}
+
+async function activate(pic) {
+  const rgba = await decode(pic);
+  if (!rgba) {
+    toast(`${pic.name} isn't a picture this browser can open.`);
+    removePicture(pic);
+    return;
+  }
+  if (!pictures.includes(pic)) return; // removed while decoding
+  source = pic;
+  worker.postMessage({ type: "source", rgba, w: pic.w, h: pic.h }, [rgba.buffer]);
+  // like the PixelOE demo: keep the longest side, follow the picture's proportions
+  if (S.lock) applyLong(S.long);
+  save();
+  renderControls();
+  renderStrip();
+  $("welcome").hidden = true;
+  // A stored result that is still current is shown as is (id -1: the worker has no
+  // intermediates for it yet; prepareView runs the pipeline if a view needs them).
+  if (pic.out) show({ ...pic.out, id: -1 });
+  if (!upToDate(pic)) run();
+  else { endProgress(); setStatus("ok", "Done"); }
+}
+
+function removePicture(pic) {
+  const i = pictures.indexOf(pic);
+  if (i < 0) return;
+  pictures.splice(i, 1);
+  if (pic === source) {
+    source = null;
+    const next = pictures[Math.min(i, pictures.length - 1)];
+    if (next) activate(next);
+    else reset();
+  }
+  renderStrip();
+}
+
+// back to the welcome screen
+function reset() {
+  result = null;
+  views.clear();
+  $("welcome").hidden = false;
+  $("view").hidden = $("stageFoot").hidden = $("viewerBar").hidden = true;
+  $("canvasBox").classList.remove("has-image");
+  setStatus("", "Ready");
+  updateGo();
 }
 
 $("pickBtn").onclick = $("welcomePick").onclick = () => $("fileInput").click();
 $("fileInput").onchange = (e) => {
-  const f = e.target.files[0];
-  if (f) loadBlob(f, f.name);
+  addPictures([...e.target.files].map((f) => ({ blob: f, name: f.name })));
   e.target.value = "";
 };
 
@@ -216,7 +281,7 @@ for (const s of SAMPLES) {
     try {
       const r = await fetch(s.file);
       if (!r.ok) throw new Error(r.statusText);
-      loadBlob(await r.blob(), s.name);
+      addPictures([{ blob: await r.blob(), name: s.name }]);
     } catch {
       toast("Couldn't load the sample.");
     }
@@ -235,15 +300,233 @@ addEventListener("drop", (e) => {
   e.preventDefault();
   dragDepth = 0;
   $("dropHint").hidden = true;
-  const f = [...e.dataTransfer.files].find((f) => f.type.startsWith("image/")) || e.dataTransfer.files[0];
-  if (f) loadBlob(f, f.name);
+  const files = [...e.dataTransfer.files].filter((f) => f.type.startsWith("image/"));
+  if (!files.length) { toast("Drop picture files (PNG, JPEG, WebP…)."); return; }
+  addPictures(files.map((f) => ({ blob: f, name: f.name })));
 });
 addEventListener("paste", (e) => {
-  const item = [...(e.clipboardData?.items || [])].find((i) => i.type.startsWith("image/"));
-  if (!item) return;
+  const items = [...(e.clipboardData?.items || [])].filter((i) => i.type.startsWith("image/"));
+  if (!items.length) return;
   e.preventDefault();
-  loadBlob(item.getAsFile(), "Pasted picture");
+  addPictures(items.map((i) => ({ blob: i.getAsFile(), name: "Pasted picture" })));
 });
+
+// ------------------------------------------------------------------ strip of pictures and batch runs
+
+const CHECK = '<svg viewBox="0 0 24 24"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
+
+// What a picture's output needs. The active one uses the size controls as they are; the others
+// keep the longest side and their own proportions (or the exact size when the ratio is unlocked).
+function paramsFor(pic) {
+  const p = pipelineParams();
+  if (pic !== source && S.lock && pic.w) [p.targetW, p.targetH] = dimsFor(S.long, pic.w / pic.h);
+  return p;
+}
+const upToDate = (pic) => !!pic.out && !!pic.w && pic.out.key === JSON.stringify(paramsFor(pic));
+
+// A small square thumbnail, drawn once per picture and reused across renders (no flicker, and
+// no full-size decode per tile).
+function thumbOf(pic) {
+  if (pic.thumb) return pic.thumb;
+  const c = (pic.thumb = document.createElement("canvas"));
+  c.width = c.height = 96;
+  c.setAttribute("role", "img");
+  c.setAttribute("aria-label", pic.name);
+  createImageBitmap(pic.blob, { imageOrientation: "from-image" }).then((bmp) => {
+    const s = Math.min(bmp.width, bmp.height), x = c.getContext("2d");
+    x.imageSmoothingQuality = "high";
+    x.drawImage(bmp, (bmp.width - s) / 2, (bmp.height - s) / 2, s, s, 0, 0, 96, 96);
+    bmp.close?.();
+  }, () => {});
+  return c;
+}
+
+function renderStrip() {
+  const multi = pictures.length > 1;
+  $("batchRow").hidden = !multi;
+  if (!multi) return;
+  const strip = $("strip");
+  strip.replaceChildren(...pictures.map((pic) => {
+    const t = document.createElement("div");
+    const fresh = upToDate(pic);
+    t.className = "tile";
+    t.classList.toggle("done", fresh);
+    t.classList.toggle("running", pic.state === "running");
+    t.classList.toggle("failed", pic.state === "error");
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "tile-pick";
+    b.title = `${pic.name}${pic.w ? ` · ${pic.w} × ${pic.h}` : ""}${fresh ? " · done" : pic.state === "error" ? " · failed" : ""}`;
+    if (pic === source) b.setAttribute("aria-current", "true");
+    b.append(thumbOf(pic));
+    b.onclick = () => { if (pic !== source) activate(pic); };
+    const badge = document.createElement("span");
+    badge.className = "badge";
+    badge.innerHTML = fresh ? CHECK : pic.state === "error" ? "!" : "";
+    const x = document.createElement("button");
+    x.type = "button";
+    x.className = "x";
+    x.title = `Remove ${pic.name}`;
+    x.setAttribute("aria-label", `Remove ${pic.name}`);
+    x.textContent = "×";
+    x.onclick = () => removePicture(pic);
+    t.append(b, badge, x);
+    return t;
+  }));
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "tile add";
+  add.title = `Add pictures (up to ${MAX_PICTURES})`;
+  add.setAttribute("aria-label", "Add pictures");
+  add.disabled = pictures.length >= MAX_PICTURES;
+  add.innerHTML = '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>';
+  add.onclick = () => $("fileInput").click();
+  strip.append(add);
+  strip.querySelector("[aria-current]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  renderBatch();
+}
+
+let batch = null; // { done, total, cancel }
+
+function renderBatch() {
+  const done = pictures.filter(upToDate).length, n = pictures.length;
+  $("batchCount").textContent = batch ? `${batch.done} / ${batch.total}` : `${done} / ${n} done`;
+  $("batchBar").style.width = `${(100 * (batch ? batch.done / Math.max(batch.total, 1) : done / Math.max(n, 1)))}%`;
+  $("runAllBtn").hidden = !!batch;
+  $("stopAllBtn").hidden = !batch;
+  $("runAllBtn").disabled = done === n;
+  $("zipBtn").disabled = !!batch;
+  $("zipBtn").title = done === n ? "Download every result as a ZIP" : "Process the remaining pictures, then download every result as a ZIP";
+}
+
+const waitIdle = () => (busy || pending ? new Promise((r) => idleWaiters.push(r)) : Promise.resolve());
+
+async function processOne(pic) {
+  if (pic === source) {
+    // the active picture goes through the live pipeline (and its cache)
+    await waitIdle();
+    if (!upToDate(pic)) { run(); await waitIdle(); }
+    if (!upToDate(pic)) throw new Error("failed");
+    return;
+  }
+  const rgba = await decode(pic);
+  if (!rgba) throw new Error(`${pic.name} can't be opened`);
+  const params = paramsFor(pic), id = ++runSeq;
+  const m = await new Promise((resolve, reject) => {
+    batchJobs.set(id, { resolve, reject });
+    worker.postMessage({ type: "runOnce", id, params, rgba, w: pic.w, h: pic.h }, [rgba.buffer]);
+  });
+  pic.out = outFrom(m, params);
+}
+
+// Bring every picture up to date with the current settings, one after another.
+// Resolves true when it ran to the end (false when stopped).
+async function runAll() {
+  if (batch) return false;
+  const todo = pictures.filter((p) => !upToDate(p));
+  batch = { done: 0, total: todo.length, cancel: false };
+  let failed = 0;
+  renderBatch();
+  for (const pic of todo) {
+    if (batch.cancel) break;
+    if (pictures.includes(pic)) {
+      pic.state = "running";
+      renderStrip();
+      try {
+        await processOne(pic);
+        pic.state = "";
+      } catch {
+        pic.state = "error";
+        failed++;
+      }
+    }
+    batch.done++;
+    renderStrip();
+  }
+  const finished = !batch.cancel;
+  batch = null;
+  for (const p of pictures) if (p.state === "running") p.state = "";
+  renderStrip();
+  if (failed) toast(`${failed} picture${failed > 1 ? "s" : ""} couldn't be processed.`);
+  else if (finished && todo.length) toast(`All ${pictures.length} pictures are done.`);
+  return finished;
+}
+
+$("runAllBtn").onclick = runAll;
+$("stopAllBtn").onclick = () => { if (batch) batch.cancel = true; };
+$("zipBtn").onclick = async () => {
+  if (pictures.some((p) => !upToDate(p)) && !(await runAll())) return;
+  const ready = pictures.filter(upToDate);
+  if (!ready.length) return;
+  $("zipBtn").disabled = true;
+  try {
+    const used = new Set(), files = [];
+    for (const pic of ready) {
+      const stem = stemOf(pic.name);
+      let name = `${stem}_${fileName(pic.out)}`;
+      for (let i = 2; used.has(name); i++) name = `${stem}-${i}_${fileName(pic.out)}`;
+      used.add(name);
+      files.push({ name, data: new Uint8Array(await (await exportBlob(pic.out)).arrayBuffer()) });
+    }
+    saveBlob(zipStore(files), `pixeloe_${ready.length}_pictures.zip`);
+  } finally {
+    renderBatch();
+  }
+};
+
+// Minimal ZIP writer, "stored" entries: PNG data is already compressed.
+const CRC_TABLE = Array.from({ length: 256 }, (_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c >>> 0;
+});
+function crc32(data) {
+  let c = 0xffffffff;
+  for (let i = 0; i < data.length; i++) c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+function zipStore(files) {
+  const enc = new TextEncoder(), parts = [], central = [];
+  const d = new Date(), time = (d.getHours() << 11) | (d.getMinutes() << 5) | (d.getSeconds() >> 1);
+  const date = ((d.getFullYear() - 1980) << 9) | ((d.getMonth() + 1) << 5) | d.getDate();
+  let offset = 0;
+  for (const f of files) {
+    const name = enc.encode(f.name), crc = crc32(f.data), size = f.data.length;
+    const local = new DataView(new ArrayBuffer(30));
+    local.setUint32(0, 0x04034b50, true);
+    local.setUint16(4, 20, true);
+    local.setUint16(6, 0x0800, true); // UTF-8 names
+    local.setUint16(10, time, true);
+    local.setUint16(12, date, true);
+    local.setUint32(14, crc, true);
+    local.setUint32(18, size, true);
+    local.setUint32(22, size, true);
+    local.setUint16(26, name.length, true);
+    parts.push(local, name, f.data);
+    const cen = new DataView(new ArrayBuffer(46));
+    cen.setUint32(0, 0x02014b50, true);
+    cen.setUint16(4, 20, true);
+    cen.setUint16(6, 20, true);
+    cen.setUint16(8, 0x0800, true);
+    cen.setUint16(12, time, true);
+    cen.setUint16(14, date, true);
+    cen.setUint32(16, crc, true);
+    cen.setUint32(20, size, true);
+    cen.setUint32(24, size, true);
+    cen.setUint16(28, name.length, true);
+    cen.setUint32(42, offset, true);
+    central.push(cen, name);
+    offset += 30 + name.length + size;
+  }
+  const cenSize = central.reduce((s, p) => s + p.byteLength, 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true);
+  end.setUint16(8, files.length, true);
+  end.setUint16(10, files.length, true);
+  end.setUint32(12, cenSize, true);
+  end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, end], { type: "application/zip" });
+}
 
 // ------------------------------------------------------------------ controls
 
@@ -280,11 +563,11 @@ function seg(el, options, get, set, after = settingsChanged) {
 
 const aspect = () => (source ? source.w / source.h : 1);
 const clampSide = (v) => Math.min(MAX_SIDE, Math.max(MIN_SIDE, Math.round(v) || MIN_SIDE));
+// output size with the given longest side and aspect ratio
+const dimsFor = (long, r) => (r >= 1 ? [long, clampSide(long / r)] : [clampSide(long * r), long]);
 function applyLong(long) {
   S.long = long;
-  const r = aspect();
-  if (r >= 1) { S.targetW = long; S.targetH = clampSide(long / r); }
-  else { S.targetH = long; S.targetW = clampSide(long * r); }
+  [S.targetW, S.targetH] = dimsFor(long, aspect());
 }
 function setW(v) {
   S.targetW = clampSide(v);
@@ -433,6 +716,8 @@ async function prepareView() {
   const want = [];
   if (mode === "compare" || peek) want.push("input");
   if (mode === "steps") want.push(step);
+  // a stored result has no intermediates in the worker: run once (show() comes back here)
+  if (want.length && result.id === -1) { run(); return; }
   await Promise.all(want.map(requestView));
   draw();
 }
@@ -586,11 +871,12 @@ $("gridBtn").onclick = () => { S.grid = !S.grid; save(); renderZoom(); draw(); i
 const fmtMs = (ms) => (ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(1)} s`);
 const MODE_LABEL = Object.fromEntries(MODES.map((m) => [m.value, m.label]));
 
-function exportScale() { return S.exportScale || result?.params.pixelSize || 1; }
+const exportScale = (res = result) => S.exportScale || res?.params.pixelSize || 1;
 
 function renderInfo() {
   const p = result.params, sep = '<span class="sep">·</span>';
   const parts = [
+    source ? `<span class="src" title="${esc(source.name)}${source.w ? ` · ${source.w} × ${source.h}${source.note ? " (reduced)" : ""}` : ""}">${esc(source.name)}</span>` : "",
     `<b>${result.w} × ${result.h}</b> px`,
     `patch ${p.pixelSize}`,
     p.thickness ? `outline ${p.thickness}` : "no outline",
@@ -598,7 +884,7 @@ function renderInfo() {
     p.colors ? `<b>${result.palette?.length ?? p.colors}</b> color palette${p.dither !== "none" ? `, ${p.dither === "ordered" ? "ordered" : "diffusion"} dither` : ""}` : `${result.colors > 4096 ? "4096+" : result.colors} colors`,
     `<span title="${Object.entries(result.timings || {}).map(([k, v]) => `${k} ${fmtMs(v)}`).join(" · ") || "all steps cached"}">${fmtMs(result.ms)}</span>`,
   ];
-  $("meta").innerHTML = parts.join(sep);
+  $("meta").innerHTML = parts.filter(Boolean).join(sep);
 
   const sel = $("exportScale");
   sel.replaceChildren(...EXPORT_SCALES.map((s) => {
@@ -625,9 +911,13 @@ $("exportScale").onchange = () => {
   save();
 };
 
+// a file name without its extension, safe to use in another file name
+const stemOf = (name) => name.replace(/\.[^.]+$/, "").replace(/[\\/:*?"<>|]+/g, "_") || "picture";
+const esc = (t) => t.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
 // same naming scheme as the PixelOE demo
-function fileName() {
-  const p = result.params, s = exportScale(), parts = [`${result.w}x${result.h}`, `p${p.pixelSize}`];
+function fileName(res = result) {
+  const p = res.params, s = exportScale(res), parts = [`${res.w}x${res.h}`, `p${p.pixelSize}`];
   if (p.thickness > 0) parts.push(`t${p.thickness}`);
   parts.push(p.mode);
   if (p.colors > 0) {
@@ -642,22 +932,27 @@ function fileName() {
   return `pixeloe_${parts.join("_")}.png`;
 }
 
-function exportBlob() {
-  const s = exportScale(), c = document.createElement("canvas");
-  c.width = result.w * s; c.height = result.h * s;
+function exportBlob(res = result) {
+  const s = exportScale(res), c = document.createElement("canvas");
+  c.width = res.w * s; c.height = res.h * s;
   const x = c.getContext("2d");
   x.imageSmoothingEnabled = false;
-  x.drawImage(result.canvas, 0, 0, c.width, c.height);
-  return new Promise((res) => c.toBlob(res, "image/png"));
+  x.drawImage(res.canvas, 0, 0, c.width, c.height);
+  return new Promise((ok) => c.toBlob(ok, "image/png"));
+}
+
+function saveBlob(blob, name) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 10000);
 }
 
 async function download() {
   if (!result) return;
-  const blob = await exportBlob(), a = document.createElement("a");
-  a.href = URL.createObjectURL(blob);
-  a.download = fileName();
-  a.click();
-  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  // with several pictures, say which one it was
+  saveBlob(await exportBlob(), pictures.length > 1 && source ? `${stemOf(source.name)}_${fileName()}` : fileName());
 }
 $("downloadBtn").onclick = download;
 $("copyBtn").onclick = async () => {
@@ -699,6 +994,14 @@ addEventListener("keydown", (e) => {
   if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") { e.preventDefault(); download(); return; }
   if (e.ctrlKey || e.metaKey || e.altKey || typing(e) || $("about").open) return;
   const r = box.getBoundingClientRect();
+  if ((e.key === "ArrowLeft" || e.key === "ArrowRight") && pictures.length > 1 && source) {
+    // radio groups and sliders use the arrows themselves
+    if (e.defaultPrevented || e.target.closest?.("input, [role=radio]")) return;
+    const i = pictures.indexOf(source), next = pictures[(i + (e.key === "ArrowRight" ? 1 : -1) + pictures.length) % pictures.length];
+    e.preventDefault();
+    activate(next);
+    return;
+  }
   if (e.key === " " && result && !e.repeat) {
     if (e.target.closest?.("button, input")) return;
     e.preventDefault();
