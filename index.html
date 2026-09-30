@@ -1,0 +1,202 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PixelOE Web</title>
+<meta name="description" content="Turn any picture into pixel art with PixelOE's contrast-aware outline expansion, running entirely in your browser.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%2322b892'/%3E%3Cpath fill='white' d='M8 8h7v7H8zM17 17h7v7h-7z'/%3E%3Cpath fill='white' fill-opacity='.55' d='M17 8h7v7h-7zM8 17h7v7H8z'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="app/style.css">
+</head>
+<body>
+<div class="app">
+  <aside class="rail" aria-label="Pixelization settings">
+    <!-- app header, compact -->
+    <header class="rail-head">
+      <span class="logo" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <div class="brand-text">
+        <span class="name">Pixel<b>OE</b> Web</span>
+        <span class="status" id="status" role="status" aria-live="polite"><span class="dot" id="statusDot"></span><span id="statusText">Starting…</span></span>
+      </div>
+      <button class="icon-btn small" id="aboutBtn" type="button" title="How it works" aria-label="How it works">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .8-1 1.5v.7"/><circle cx="12" cy="17" r="1" class="fill"/></svg>
+      </button>
+      <a class="icon-btn small" href="https://github.com/KohakuBlueleaf/PixelOE" target="_blank" rel="noopener" title="PixelOE on GitHub" aria-label="PixelOE on GitHub">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 19c-4.3 1.4-4.3-2.5-6-3m12 5v-3.5c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12.3 12.3 0 0 0-6.2 0C6.5 2.8 5.4 3.1 5.4 3.1a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 4 9.5c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/></svg>
+      </a>
+    </header>
+    <input type="file" id="fileInput" accept="image/*" hidden>
+
+    <!-- output size -->
+    <section class="group">
+      <div class="label-row">
+        <span class="label">Output size</span>
+        <button class="pill" id="lockBtn" type="button" aria-pressed="true" title="Keep the picture's proportions">⛓ Keep ratio</button>
+      </div>
+      <div class="seg" id="sizePresets" role="radiogroup" aria-label="Longest side"></div>
+      <div class="dims">
+        <label class="slider"><span>W</span><input type="range" id="wRange" min="16" max="768" step="1" aria-label="Width in pixels"><input class="num" id="wNum" type="number" min="16" max="1024" aria-label="Width in pixels"></label>
+        <label class="slider"><span>H</span><input type="range" id="hRange" min="16" max="768" step="1" aria-label="Height in pixels"><input class="num" id="hNum" type="number" min="16" max="1024" aria-label="Height in pixels"></label>
+      </div>
+    </section>
+
+    <!-- pixel analysis -->
+    <section class="group">
+      <div class="label-row">
+        <span class="label" id="patchLabel">Patch size</span>
+        <span class="hint" id="workHint"></span>
+      </div>
+      <div class="seg" id="patch" role="radiogroup" aria-labelledby="patchLabel"></div>
+      <p class="help">Source pixels behind each output pixel. Larger patches see more detail but take longer.</p>
+    </section>
+
+    <section class="group">
+      <div class="label-row">
+        <span class="label" id="thickLabel">Outline expansion</span>
+        <output class="hint" id="thickOut"></output>
+      </div>
+      <input type="range" id="thickness" min="0" max="6" step="1" aria-labelledby="thickLabel">
+      <p class="help">Thickens fine lines and edges so they survive the downscale. 0 turns it off.</p>
+    </section>
+
+    <section class="group">
+      <span class="label" id="modeLabel">Downscale method</span>
+      <div class="modes" id="modes" role="radiogroup" aria-labelledby="modeLabel"></div>
+    </section>
+
+    <!-- palette -->
+    <section class="group">
+      <div class="label-row">
+        <span class="label" id="paletteLabel">Color palette</span>
+        <button class="pill" id="paletteBtn" type="button" aria-pressed="false" title="Reduce the picture to a limited set of colors">▦ Limit colors</button>
+      </div>
+      <div class="palette-opts" id="paletteOpts">
+        <label class="slider wide"><span>Colors</span><input type="range" id="colors" min="0" max="12" step="1" aria-label="Number of colors"><output id="colorsOut"></output></label>
+        <div class="seg" id="dither" role="radiogroup" aria-label="Dithering"></div>
+        <div class="seg" id="quantMode" role="radiogroup" aria-label="Palette method"></div>
+        <label class="check"><input type="checkbox" id="strict"> <span>Exact palette <small>quantize last, skip color matching</small></span></label>
+      </div>
+    </section>
+
+    <details class="advanced" id="advanced">
+      <summary>Advanced</summary>
+      <div class="adv-body">
+        <div class="field">
+          <span class="label" id="mapLabel">Outline weight mapping</span>
+          <div class="seg" id="mapping" role="radiogroup" aria-labelledby="mapLabel"></div>
+        </div>
+        <div class="field">
+          <span class="label" id="normLabel">Weight normalization</span>
+          <div class="seg" id="normalize" role="radiogroup" aria-labelledby="normLabel"></div>
+        </div>
+        <div class="field">
+          <span class="label" id="sharpLabel">Sharpen after expansion</span>
+          <div class="seg" id="sharpen" role="radiogroup" aria-labelledby="sharpLabel"></div>
+          <label class="slider wide" id="sharpAmount"><span>Amount</span><input type="range" id="sharpenFactor" min="0.1" max="2" step="0.1" aria-label="Sharpening amount"><output id="sharpenOut"></output></label>
+        </div>
+        <label class="check"><input type="checkbox" id="colorMatch"> <span>Color matching <small>keep the source's colors after expansion</small></span></label>
+        <button class="link" id="resetBtn" type="button">Reset all settings</button>
+      </div>
+    </details>
+
+    <div class="go-row">
+      <button class="primary" id="goBtn" type="button" disabled><span id="goLabel">Pixelize</span><span class="go-sub" id="goSub"></span></button>
+      <button class="icon-btn live" id="liveBtn" type="button" aria-pressed="true" title="Update automatically when settings change">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M13 3 5 14h6l-1 7 8-11h-6z"/></svg>
+      </button>
+    </div>
+  </aside>
+
+  <main class="stage" aria-label="Result">
+    <div class="viewer-bar" id="viewerBar" hidden>
+      <button class="open-btn" id="pickBtn" type="button" title="Open another picture (or drop / paste one)" hidden>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M4 16v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+        <span id="sourceName">Open</span>
+      </button>
+      <div class="seg views" id="views" role="radiogroup" aria-label="View"></div>
+      <div class="seg steps" id="steps" role="radiogroup" aria-label="Pipeline step" hidden></div>
+      <div class="zoom">
+        <button class="icon-btn soft" id="gridBtn" type="button" aria-pressed="false" title="Pixel grid (G)" aria-label="Pixel grid">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9h16M4 15h16M9 4v16M15 4v16"/><rect x="4" y="4" width="16" height="16" rx="2"/></svg>
+        </button>
+        <button class="icon-btn soft" id="zoomOut" type="button" title="Zoom out (−)" aria-label="Zoom out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12"/></svg></button>
+        <button class="zoom-level" id="zoomLevel" type="button" title="Fit to view (0) · actual pixels (1)">Fit</button>
+        <button class="icon-btn soft" id="zoomIn" type="button" title="Zoom in (+)" aria-label="Zoom in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 12h12M12 6v12"/></svg></button>
+      </div>
+    </div>
+
+    <div class="canvas-box" id="canvasBox">
+      <canvas id="view" hidden></canvas>
+      <div class="compare-handle" id="compareHandle" hidden><span></span></div>
+      <div class="compare-tags" id="compareTags" hidden><span>Source</span><span>Pixel art</span></div>
+
+      <div class="panel-center" id="welcome">
+        <div class="empty-art" aria-hidden="true">
+          <svg viewBox="0 0 132 104">
+            <rect class="frame" x="10" y="14" width="100" height="78" rx="12"/>
+            <path class="hill" d="M18 84h12v-8h8v-8h8v8h8v-8h8v-8h8v8h8v8h8v8h14z"/>
+            <rect class="hill" x="70" y="30" width="12" height="12"/>
+            <path class="spark" d="M112 10v14M105 17h14M122 34v8M118 38h8M24 4v8M20 8h8"/>
+          </svg>
+        </div>
+        <h1>Turn any picture into pixel art</h1>
+        <p class="lead">PixelOE keeps thin lines and small details that a plain downscale would lose. It runs entirely in this browser, and your pictures never leave your device.</p>
+        <div class="welcome-actions">
+          <button class="primary wide" id="welcomePick" type="button">Choose a picture</button>
+        </div>
+        <p class="help">or drop one here, or paste with <kbd>Ctrl</kbd>+<kbd>V</kbd></p>
+        <div class="samples" id="samples"></div>
+      </div>
+
+      <div class="drop-hint" id="dropHint" hidden><span>Drop to pixelize</span></div>
+
+      <div class="progress-card" id="progress" hidden>
+        <div class="bar-progress"><div id="progressBar"></div></div>
+        <span id="progressText"></span>
+      </div>
+
+      <div class="error-card" id="errorCard" hidden></div>
+    </div>
+
+    <div class="stage-foot" id="stageFoot" hidden>
+      <div class="info">
+        <div class="meta" id="meta"></div>
+        <div class="actions">
+          <select class="scale" id="exportScale" aria-label="Download scale" title="Download scale"></select>
+          <button type="button" id="copyBtn" title="Copy to clipboard">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="12" height="12" rx="2"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2"/></svg><span>Copy</span>
+          </button>
+          <button type="button" class="accent" id="downloadBtn" title="Download PNG (Ctrl+S)">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 4v12M7 11l5 5 5-5M5 20h14"/></svg><span>Download</span>
+          </button>
+        </div>
+      </div>
+      <div class="swatches" id="swatches" aria-label="Palette"></div>
+    </div>
+  </main>
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+<dialog id="about" aria-labelledby="aboutTitle">
+  <form method="dialog" class="dialog">
+    <div class="dialog-head">
+      <h2 id="aboutTitle">How PixelOE works</h2>
+      <button class="icon-btn" value="close" aria-label="Close"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg></button>
+    </div>
+    <p class="lead">PixelOE makes pixel art from ordinary pictures with classic image processing, with no AI model involved. Downscaling a picture normally loses its thin lines and small highlights. PixelOE first makes those details thicker, then picks each output pixel with care.</p>
+    <ol class="steps-list">
+      <li><b>Resize.</b> The picture is resized to the output size × the patch size, so each output pixel covers one patch.</li>
+      <li><b>Outline expansion.</b> A weight map compares each area's median brightness with its brightest and darkest details. Where fine detail is darker than its surroundings, the picture is <em>eroded</em> so dark lines grow. Where it is brighter, the picture is <em>dilated</em> so highlights grow. The two are blended by the weight map, then cleaned up with a morphological close and open. See the <b>Steps</b> view.</li>
+      <li><b>Color matching.</b> Expansion shifts colors, so the Lab statistics and low frequencies of the original are transferred back.</li>
+      <li><b>Contrast-aware downscale.</b> In Lab space, each patch's lightness is its minimum, maximum or center value, depending on which way the patch is skewed. Color takes the median. Other methods (k-centroid, Lanczos, nearest…) are available too.</li>
+      <li><b>Palette (optional).</b> Deterministic k-means finds a palette. Weighted and repeat variants favor detail pixels. Ordered or error-diffusion dithering can be added.</li>
+    </ol>
+    <p class="help">This is a JavaScript port of <a href="https://github.com/KohakuBlueleaf/PixelOE/tree/v1.0.0" target="_blank" rel="noopener">PixelOE v1.0.0</a> by Shin-Ying Yeh (KohakuBlueleaf), Apache-2.0. It follows the reference torch pipeline and is checked against it. The sample pictures come from the PixelOE repository.</p>
+    <p class="help">Shortcuts: <kbd>Space</kbd> (hold) shows the source · <kbd>G</kbd> pixel grid · <kbd>0</kbd> fit · <kbd>1</kbd> actual pixels · <kbd>+</kbd>/<kbd>−</kbd> zoom · <kbd>Ctrl</kbd>+<kbd>S</kbd> download · <kbd>Ctrl</kbd>+<kbd>V</kbd> paste a picture</p>
+  </form>
+</dialog>
+
+<script type="module" src="app/main.js"></script>
+</body>
+</html>
