@@ -4,6 +4,7 @@
 //
 // in:  { type: "source", rgba, w, h }                 new picture (RGBA bytes, transferred)
 //      { type: "run", id, params }                    params: target size + pixeloe options
+//      { type: "runOnce", id, params, rgba, w, h }    batch item: its own picture, nothing cached
 //      { type: "view", id, name }                     one intermediate as RGBA
 // out: { type: "progress", id, stage, frac }
 //      { type: "result", id, w, h, rgba, palette, colors, work: {w, h}, ms, timings }
@@ -69,20 +70,10 @@ const exec = (task, ...args) => new Promise((resolve, reject) => {
 
 // ------------------------------------------------------------------ pipeline with stage cache
 
-let source = null;
-const cache = new Map(); // stage -> { key, value }
+// The active picture keeps its stage cache between runs; a batch item gets a fresh one.
+let active = { source: null, cache: new Map() }; // cache: stage -> { key, value }
 
 let timings = {};
-async function stage(name, key, compute) {
-  const hit = cache.get(name);
-  if (hit && hit.key === key) return hit.value;
-  const t = performance.now();
-  const value = await compute();
-  timings[name] = Math.round(performance.now() - t);
-  cache.set(name, { key, value });
-  return value;
-}
-const fresh = (name, key) => cache.get(name)?.key !== key;
 
 // PixelOE works on RGB, so transparent areas are flattened onto white, in 8 bits like the
 // image PixelOE would load.
@@ -105,9 +96,19 @@ const countColors = (rgba) => {
   return seen.size;
 };
 
-async function run(id, p) {
+async function run(id, p, { source, cache }) {
   const t0 = performance.now();
   timings = {};
+  const stage = async (name, key, compute) => {
+    const hit = cache.get(name);
+    if (hit && hit.key === key) return hit.value;
+    const t = performance.now();
+    const value = await compute();
+    timings[name] = Math.round(performance.now() - t);
+    cache.set(name, { key, value });
+    return value;
+  };
+  const fresh = (name, key) => cache.get(name)?.key !== key;
   const o = { ...oe.DEFAULTS, ...p };
   const progress = (name, frac) => postMessage({ type: "progress", id, stage: name, frac });
   const W = p.targetW * o.pixelSize, H = p.targetH * o.pixelSize;
@@ -154,7 +155,7 @@ async function run(id, p) {
 }
 
 function view(id, name) {
-  const ex = cache.get("expand")?.value;
+  const cache = active.cache, ex = cache.get("expand")?.value;
   const im = ex && { input: ex.input, dilated: ex.dilated, eroded: ex.eroded, weight: ex.weight, expanded: ex.expanded, matched: cache.get("matched")?.value }[name];
   if (!im) { postMessage({ type: "view", id, name, w: 0, h: 0, rgba: null }); return; }
   const rgba = oe.toRGBA(im);
@@ -167,17 +168,18 @@ onmessage = ({ data: m }) => {
   chain = chain.then(async () => {
     try {
       if (m.type === "source") {
-        source = { id: ++sourceSeq, rgba: flatten(m.rgba), w: m.w, h: m.h };
-        cache.clear();
+        active = { source: { id: ++sourceSeq, rgba: flatten(m.rgba), w: m.w, h: m.h }, cache: new Map() };
       } else if (m.type === "run") {
-        if (!source) throw new Error("No image loaded");
-        await run(m.id, m.params);
+        if (!active.source) throw new Error("No image loaded");
+        await run(m.id, m.params, active);
+      } else if (m.type === "runOnce") {
+        await run(m.id, m.params, { source: { id: ++sourceSeq, rgba: flatten(m.rgba), w: m.w, h: m.h }, cache: new Map() });
       } else if (m.type === "view") {
         view(m.id, m.name);
       }
     } catch (err) {
       console.error(err);
-      if (m.type === "run") cache.clear(); // don't keep a stage that may be half-built
+      if (m.type === "run") active.cache.clear(); // don't keep a stage that may be half-built
       postMessage({ type: "error", id: m.id, message: String(err?.message ?? err) });
     }
   });
