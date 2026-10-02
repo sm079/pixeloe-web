@@ -5,6 +5,8 @@ Turn any picture into pixel art in the browser, with
 It is a static site with no build step, no server-side processing and no dependencies. Pictures
 never leave your device.
 
+![PixelOE Web: settings on the left, a before/after comparison of a pixelized picture on the right, and a batch of three pictures below](docs/screenshot.webp)
+
 PixelOE uses classic image processing, not a neural network. Before downscaling, it thickens the
 thin lines and small highlights that a plain resize would lose. Then it picks each output pixel with
 a contrast-aware rule. This app is a JavaScript port of the v1.0.0 torch pipeline, checked
