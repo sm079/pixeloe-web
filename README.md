@@ -95,3 +95,5 @@ fallback conversion. The two differ only slightly.
 PixelOE is by Shin-Ying Yeh ([KohakuBlueleaf](https://github.com/KohakuBlueleaf)) and is licensed
 under Apache-2.0. The k-centroid downscale algorithm is by Astropulse. The sample pictures are from
 the PixelOE repository.
+
+This port is licensed under Apache-2.0 as well; see [LICENSE](LICENSE).
